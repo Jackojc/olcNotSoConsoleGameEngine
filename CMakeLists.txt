@@ -5,11 +5,10 @@ project(${PROJECT_NAME})
 
 # SOURCE FILES
 set(MAIN main.cpp)
-set(GAME_ENGINE olcConsoleGameEngine.h)
 
 
 # EXECUTABLE
-add_executable(${PROJECT_NAME} ${GAME_ENGINE} ${MAIN})
+add_executable(${PROJECT_NAME} ${MAIN})
 
 
 # LINK

@@ -217,15 +217,6 @@ struct Point {
 
 
 
-struct MessageGlyph {
-    int x, y;
-    uint8_t c;
-    SDL_Color col;
-};
-
-
-
-
 class olcConsoleGameEngine {
     public:
         sKeyState m_mouse[5];
@@ -256,6 +247,8 @@ class olcConsoleGameEngine {
 
         SDL_Texture* m_fontFile;
         SDL_Texture* m_shapeBuffer;
+        SDL_Texture* m_shapeBuffer2;
+        SDL_Texture* m_fontBuffer;
         Uint32* m_windowPixels;
 
         std::atomic<bool> m_bAtomActive;
@@ -263,10 +256,6 @@ class olcConsoleGameEngine {
         std::mutex m_muxGame;
 
         std::string m_sTitle;
-
-
-
-        std::deque<MessageGlyph> m_queueGlyph;
 
     public:
         std::wstring m_sAppName;
@@ -404,7 +393,8 @@ class olcConsoleGameEngine {
                 m_window,
                 -1,
                 SDL_RENDERER_ACCELERATED |
-                SDL_RENDERER_PRESENTVSYNC
+                SDL_RENDERER_PRESENTVSYNC |
+                SDL_RENDERER_TARGETTEXTURE
             );
             CheckFailure(
                 m_render,
@@ -427,7 +417,7 @@ class olcConsoleGameEngine {
 
             LoadFontFile("./font.bmp");
 
-            m_windowPixels = new Uint32[m_nScreenWidth * m_nScreenHeight];
+            m_windowPixels = new Uint32[(m_nScreenWidth + 1) * (m_nScreenHeight + 1)];
 
             m_shapeBuffer = SDL_CreateTexture(
                 m_render,
@@ -436,6 +426,24 @@ class olcConsoleGameEngine {
                 m_nScreenWidth,
                 m_nScreenHeight
             );
+
+            m_shapeBuffer2 = SDL_CreateTexture(
+                m_render,
+                SDL_PIXELFORMAT_ARGB8888,
+                SDL_TEXTUREACCESS_TARGET,
+                m_nScreenWidth,
+                m_nScreenHeight
+            );
+
+            m_fontBuffer = SDL_CreateTexture(
+                m_render,
+                SDL_PIXELFORMAT_ARGB8888,
+                SDL_TEXTUREACCESS_TARGET,
+                m_nScreenWidthPixels,
+                m_nScreenHeightPixels
+            );
+
+            SDL_SetRenderTarget(m_render, m_fontBuffer);
 
 
             SetWindowTitle(0.0f);
@@ -446,7 +454,16 @@ class olcConsoleGameEngine {
 
 
         void QuitSDL() {
+            SDL_DestroyTexture(m_fontBuffer);
+            SDL_DestroyTexture(m_shapeBuffer2);
+            SDL_DestroyTexture(m_shapeBuffer);
+
+            delete[] m_windowPixels;
+
             SDL_DestroyTexture(m_fontFile);
+
+            delete[] m_keys;
+            delete[] m_keyOldState;
 
             SDL_DestroyRenderer(m_render);
             SDL_DestroyWindow(m_window);
@@ -465,8 +482,6 @@ class olcConsoleGameEngine {
 
     private:
         void UpdateMouseState() {
-            //SDL_PumpEvents();
-
             Uint32 state = SDL_GetMouseState(&m_mousePosX, &m_mousePosY);
 
             m_mousePosX /= m_nFontWidth;
@@ -504,8 +519,6 @@ class olcConsoleGameEngine {
 
 
         void UpdateKeyboardState() {
-            //SDL_PumpEvents();
-
             for (int i = 0; i < m_numKeys; ++i) {
                 m_keys[i].bPressed = false;
                 m_keys[i].bReleased = false;
@@ -581,6 +594,8 @@ class olcConsoleGameEngine {
             uint8_t c,
             SDL_Color& col
         ) {
+            SDL_SetRenderTarget(m_render, m_fontBuffer);
+
             Point pt = CharIndexFontFile(c);
             SDL_Rect src = {
                 pt.x * (FONT_SIZE_W + FONT_SIZE_BORDER),
@@ -617,21 +632,8 @@ class olcConsoleGameEngine {
 
 
 
-
-        // do all the foreground stuff
-        void UpdateScreen() {
-            for (auto& x: m_queueGlyph)
-                DrawFG(x.x, x.y, x.c, x.col);
-
-            m_queueGlyph.clear();
-        }
-
-
-
         void UpdatePostFrame() {
-            SDL_RenderCopy(m_render, m_shapeBuffer, nullptr, nullptr);
-
-            UpdateScreen();
+            SDL_SetRenderTarget(m_render, nullptr);
 
             SDL_UpdateTexture(
                 m_shapeBuffer,
@@ -640,23 +642,20 @@ class olcConsoleGameEngine {
                 (m_nScreenWidth) * sizeof(Uint32)
             );
 
-
-
-
-            SDL_RenderPresent(m_render);
-            //SDL_SetRenderDrawColor(m_render, 255, 0, 0, 255);
-            //SDL_RenderClear(m_render);
-
-
-            // because we draw the entire shape buffer to the renderer
-            // we dont need to manually clear the renderer using the above
-            // functions.
             std::memset(
                 m_windowPixels,
                 (255 << 24) + (0 << 16) + (0 << 8) + 0,
                 (m_nScreenWidth * m_nScreenHeight) * sizeof(Uint32)
             );
 
+            SDL_RenderCopy(m_render, m_shapeBuffer, nullptr, nullptr);
+            SDL_RenderCopy(m_render, m_fontBuffer, nullptr, nullptr);
+
+            SDL_RenderPresent(m_render);
+
+            SDL_SetRenderTarget(m_render, m_fontBuffer);
+            SDL_SetRenderDrawColor(m_render, 0, 0, 0, 255);
+            SDL_RenderClear(m_render);
         }
 
 
@@ -726,12 +725,11 @@ class olcConsoleGameEngine {
 
     public:
 
-        Point Clip(int x, int y) {
-            if (x < 0) x = m_nScreenWidth;
-            if (x >= m_nScreenWidth) x = 0;
-            if (y < 0) y = m_nScreenHeight;
-            if (y >= m_nScreenHeight) y = 0;
-            return {x, y};
+        void Clip(int& x, int& y) {
+            if (x < 0) x = 0;
+            if (x >= m_nScreenWidth) x = m_nScreenWidth;
+            if (y < 0) y = 0;
+            if (y >= m_nScreenHeight) y = m_nScreenHeight;
         }
 
         virtual void Draw(
@@ -742,18 +740,21 @@ class olcConsoleGameEngine {
         ) {
             two_colour& cols = COLOUR_LOOKUP[col];
 
-            Point p = Clip(x, y);
+            Clip(x, y);
 
-            m_queueGlyph.push_back({p.x, p.y, c, cols.fg});
-
-            DrawBG(p.x, p.y, cols.bg);
+            DrawFG(x, y, c, cols.fg);
+            DrawBG(x, y, cols.bg);
         }
 
         void Fill(int x1, int y1, int x2, int y2, uint8_t c = PIXEL_SOLID, uint16_t col = FG_WHITE | BG_BLACK)
         {
-            for (int x = x1; x < x2; x++)
-                for (int y = y1; y < y2; y++)
-                    Draw(x, y, c, col);
+            SDL_Color& cols = COLOUR_LOOKUP[col].bg;
+
+            const SDL_Rect r = {x1, y1, x2, y2};
+
+            SDL_SetRenderTarget(m_render, m_shapeBuffer2);
+            SDL_SetRenderDrawColor(m_render, cols.r, cols.g, cols.b, cols.a);
+            SDL_RenderFillRect(m_render, &r);
         }
 
         void DrawString(int x, int y, const std::string& c, uint16_t col = FG_WHITE | BG_BLACK)
@@ -796,75 +797,11 @@ class olcConsoleGameEngine {
 
         void DrawLine(int x1, int y1, int x2, int y2, uint8_t c = PIXEL_SOLID, uint16_t col = FG_WHITE | BG_BLACK)
         {
-            int x, y, dx, dy, dx1, dy1, px, py, xe, ye, i;
-            dx = x2 - x1;
-            dy = y2 - y1;
-            dx1 = abs(dx);
-            dy1 = abs(dy);
-            px = 2 * dy1 - dx1;
-            py = 2 * dx1 - dy1;
-            if (dy1 <= dx1)
-            {
-                if (dx >= 0)
-                {
-                    x = x1;
-                    y = y1;
-                    xe = x2;
-                }
-                else
-                {
-                    x = x2;
-                    y = y2;
-                    xe = x1;
-                }
-                Draw(x, y, c, col);
-                for (i = 0; x<xe; i++)
-                {
-                    x = x + 1;
-                    if (px<0)
-                        px = px + 2 * dy1;
-                    else
-                    {
-                        if ((dx<0 && dy<0) || (dx>0 && dy>0))
-                            y = y + 1;
-                        else
-                            y = y - 1;
-                        px = px + 2 * (dy1 - dx1);
-                    }
-                    Draw(x, y, c, col);
-                }
-            }
-            else
-            {
-                if (dy >= 0)
-                {
-                    x = x1;
-                    y = y1;
-                    ye = y2;
-                }
-                else
-                {
-                    x = x2;
-                    y = y2;
-                    ye = y1;
-                }
-                Draw(x, y, c, col);
-                for (i = 0; y<ye; i++)
-                {
-                    y = y + 1;
-                    if (py <= 0)
-                        py = py + 2 * dx1;
-                    else
-                    {
-                        if ((dx<0 && dy<0) || (dx>0 && dy>0))
-                            x = x + 1;
-                        else
-                            x = x - 1;
-                        py = py + 2 * (dx1 - dy1);
-                    }
-                    Draw(x, y, c, col);
-                }
-            }
+            SDL_Color& cols = COLOUR_LOOKUP[col].bg;
+
+            SDL_SetRenderTarget(m_render, m_shapeBuffer2);
+            SDL_SetRenderDrawColor(m_render, cols.r, cols.g, cols.b, cols.a);
+            SDL_RenderDrawLine(m_render, x1, y1, x2, y2);
         }
 
         void DrawCircle(int xc, int yc, int r, uint8_t c = PIXEL_SOLID, uint16_t col = FG_WHITE | BG_BLACK)

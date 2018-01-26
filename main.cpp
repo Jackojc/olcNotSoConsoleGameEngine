@@ -1,6 +1,6 @@
 /*
-OneLoneCoder.com - Code-It-Yourself! Racing Game at the command prompt (quick and simple c++)
-"Let's go, go, go!!!" - @Javidx9
+OneLoneCoder.com - Recursive Backtracker Maze Algorithm
+"Get lost..." - @Javidx9
 
 Disclaimer
 ~~~~~~~~~~
@@ -13,14 +13,9 @@ Cheers!
 
 Background
 ~~~~~~~~~~
-I'm a sim-racer when I'm not coding. Racing games are far more sophisticated than
-they used to be. Frankly, retro racing games are a bit naff. But when done in the
-command prompt they have a new level of craziness.
-
-Controls
-~~~~~~~~
-Left Arrow/Right Arrow Steer, Up Arrow accelerates. There are no brakes!
-Set the fastest lap times you can!
+I really like perfect algorithms. This one shows how to generate a maze that guarantees
+all cells can reach all other cells, it just may take some time to get there. I introduce
+stacks, and show how the algorithm generates the maze visually.
 
 Author
 ~~~~~~
@@ -29,265 +24,182 @@ Blog: www.onelonecoder.com
 
 Video:
 ~~~~~~
-https://youtu.be/KkMZI5Jbf18
+https://youtu.be/Y37-gB83HKE
 
 Last Updated: 10/07/2017
 */
 
 #include <iostream>
-#include <string>
+#include <stack>
 using namespace std;
 
 #include "olcNotSoConsoleGameEngine.h"
 
-
-class OneLoneCoder_FormulaOLC : public olcConsoleGameEngine
+class OneLoneCoder_Maze : public olcConsoleGameEngine
 {
 public:
-    OneLoneCoder_FormulaOLC()
+    OneLoneCoder_Maze()
     {
-        m_sAppName = L"Formula OLC";
+        m_sAppName = L"MAZE";
     }
 
 private:
+    int  m_nMazeWidth;
+    int  m_nMazeHeight;
+    int *m_maze;
 
-    float fDistance = 0.0f;         // Distance car has travelled around track
-    float fCurvature = 0.0f;        // Current track curvature, lerped between track sections
-    float fTrackCurvature = 0.0f;   // Accumulation of track curvature
-    float fTrackDistance = 0.0f;    // Total distance of track
 
-    float fCarPos = 0.0f;           // Current car position
-    float fPlayerCurvature = 0.0f;          // Accumulation of player curvature
-    float fSpeed = 0.0f;            // Current player speed
+    // Some bit fields for convenience
+    enum
+    {
+        CELL_PATH_N = 0x01,
+        CELL_PATH_E = 0x02,
+        CELL_PATH_S = 0x04,
+        CELL_PATH_W = 0x08,
+        CELL_VISITED = 0x10,
+    };
 
-    vector<pair<float, float>> vecTrack; // Track sections, sharpness of bend, length of section
 
-    list<float> listLapTimes;       // List of previous lap times
-    float fCurrentLapTime;          // Current lap time
+    // Algorithm variables
+    int  m_nVisitedCells;
+    stack<pair<int, int>> m_stack;  // (x, y) coordinate pairs
+    int  m_nPathWidth;
+
 
 protected:
     // Called by olcConsoleGameEngine
     virtual bool OnUserCreate()
     {
-        // Define track
-        vecTrack.push_back(make_pair(0.0f, 10.0f));     // Short section for start/finish line
-        vecTrack.push_back(make_pair(0.0f, 200.0f));
-        vecTrack.push_back(make_pair(1.0f, 200.0f));
-        vecTrack.push_back(make_pair(0.0f, 400.0f));
-        vecTrack.push_back(make_pair(-1.0f, 100.0f));
-        vecTrack.push_back(make_pair(0.0f, 200.0f));
-        vecTrack.push_back(make_pair(-1.0f, 200.0f));
-        vecTrack.push_back(make_pair(1.0f, 200.0f));
-        vecTrack.push_back(make_pair(0.0f, 200.0f));
-        vecTrack.push_back(make_pair(0.2f, 500.0f));
-        vecTrack.push_back(make_pair(0.0f, 200.0f));
+        // Maze parameters
+        m_nMazeWidth = 40;
+        m_nMazeHeight = 17;
+        m_maze = new int[m_nMazeWidth * m_nMazeHeight];
+        memset(m_maze, 0x00, m_nMazeWidth * m_nMazeHeight * sizeof(int));
+        m_nPathWidth = 3;
 
-        // Calculate total track distance, so we can set lap times
-        for (auto t : vecTrack)
-            fTrackDistance += t.second;
-
-        listLapTimes = { 0,0,0,0,0 };
-        fCurrentLapTime = 0.0f;
+        // Choose a starting cell
+        int x = rand() % m_nMazeWidth;
+        int y = rand() % m_nMazeHeight;
+        m_stack.push(make_pair(x, y));
+        m_maze[y * m_nMazeWidth + x] = CELL_VISITED;
+        m_nVisitedCells = 1;
 
         return true;
     }
 
-
-
-
     // Called by olcConsoleGameEngine
     virtual bool OnUserUpdate(float fElapsedTime)
     {
-        // Handle control input
-        int nCarDirection = 0;
+        // Slow down for animation
+        this_thread::sleep_for(10ms);
 
-        if (m_keys[VK_UP].bHeld)
-            fSpeed += 2.0f * fElapsedTime;
-        else
-            fSpeed -= 1.0f * fElapsedTime;
-
-        // Car Curvature is accumulated left/right input, but inversely proportional to speed
-        // i.e. it is harder to turn at high speed
-        if (m_keys[VK_LEFT].bHeld)
+        // Little lambda function to calculate index in a readable way
+        auto offset = [&](int x, int y)
         {
-            fPlayerCurvature -= 0.7f * fElapsedTime * (1.0f - fSpeed / 2.0f);
-            nCarDirection = -1;
-        }
-
-        if (m_keys[VK_RIGHT].bHeld)
-        {
-            fPlayerCurvature += 0.7f * fElapsedTime * (1.0f - fSpeed / 2.0f);
-            nCarDirection = +1;
-        }
-
-        // If car curvature is too different to track curvature, slow down
-        // as car has gone off track
-        if (fabs(fPlayerCurvature - fTrackCurvature) >= 0.8f)
-            fSpeed -= 5.0f * fElapsedTime;
-
-        // Clamp Speed
-        if (fSpeed < 0.0f)  fSpeed = 0.0f;
-        if (fSpeed > 1.0f)  fSpeed = 1.0f;
-
-        // Move car along track according to car speed
-        fDistance += (70.0f * fSpeed) * fElapsedTime;
-
-        // Get Point on track
-        float fOffset = 0;
-        int nTrackSection = 0;
-
-        // Lap Timing and counting
-        fCurrentLapTime += fElapsedTime;
-        if (fDistance >= fTrackDistance)
-        {
-            fDistance -= fTrackDistance;
-            listLapTimes.push_front(fCurrentLapTime);
-            listLapTimes.pop_back();
-            fCurrentLapTime = 0.0f;
-        }
-
-        // Find position on track (could optimise)
-        while (nTrackSection < vecTrack.size() && fOffset <= fDistance)
-        {
-            fOffset += vecTrack[nTrackSection].second;
-            nTrackSection++;
-        }
-
-        // Interpolate towards target track curvature
-        float fTargetCurvature = vecTrack[nTrackSection - 1].first;
-        float fTrackCurveDiff = (fTargetCurvature - fCurvature) * fElapsedTime * fSpeed;
-
-        // Accumulate player curvature
-        fCurvature += fTrackCurveDiff;
-
-        // Accumulate track curvature
-        fTrackCurvature += (fCurvature) * fElapsedTime * fSpeed;
-
-        // Draw Sky - light blue and dark blue
-        for (int y = 0; y < ScreenHeight() / 2; y++)
-            for (int x = 0; x < ScreenWidth(); x++)
-                Draw(x, y, y< ScreenHeight() / 4 ? PIXEL_THREEQUARTERS : PIXEL_SOLID, FG_DARK_BLUE);
-
-        // Draw Scenery - our hills are a rectified sine wave, where the phase is adjusted by the
-        // accumulated track curvature
-        for (int x = 0; x < ScreenWidth(); x++)
-        {
-            int nHillHeight = (int)(fabs(sinf(x * 0.01f + fTrackCurvature) * 16.0f));
-            for (int y = (ScreenHeight() / 2) - nHillHeight; y < ScreenHeight() / 2; y++)
-                Draw(x, y, PIXEL_SOLID, FG_DARK_YELLOW);
-        }
-
-
-        // Draw Track - Each row is split into grass, clip-board and track
-        for (int y = 0; y < ScreenHeight() / 2; y++)
-            for (int x = 0; x < ScreenWidth(); x++)
-            {
-                // Perspective is used to modify the width of the track row segments
-                float fPerspective = (float)y / (ScreenHeight()/2.0f);
-                float fRoadWidth = 0.1f + fPerspective * 0.8f; // Min 10% Max 90%
-                float fClipWidth = fRoadWidth * 0.15f;
-                fRoadWidth *= 0.5f; // Halve it as track is symmetrical around center of track, but offset...
-
-                // ...depending on where the middle point is, which is defined by the current
-                // track curvature.
-                float fMiddlePoint = 0.5f + fCurvature * powf((1.0f - fPerspective), 3);
-
-                // Work out segment boundaries
-                int nLeftGrass = (fMiddlePoint - fRoadWidth - fClipWidth) * ScreenWidth();
-                int nLeftClip = (fMiddlePoint - fRoadWidth) * ScreenWidth();
-                int nRightClip = (fMiddlePoint + fRoadWidth) * ScreenWidth();
-                int nRightGrass = (fMiddlePoint + fRoadWidth + fClipWidth) * ScreenWidth();
-
-                int nRow = ScreenHeight() / 2 + y;
-
-                // Using periodic oscillatory functions to give lines, where the phase is controlled
-                // by the distance around the track. These take some fine tuning to give the right "feel"
-                int nGrassColour = sinf(20.0f *  powf(1.0f - fPerspective,3) + fDistance * 0.1f) > 0.0f ? FG_GREEN : FG_DARK_GREEN;
-                int nClipColour = sinf(80.0f *  powf(1.0f - fPerspective, 2) + fDistance) > 0.0f ? FG_RED : FG_WHITE;
-
-                // Start finish straight changes the road colour to inform the player lap is reset
-                int nRoadColour = (nTrackSection-1) == 0 ? FG_WHITE : FG_GREY;
-
-                // Draw the row segments
-                if (x >= 0 && x < nLeftGrass)
-                    Draw(x, nRow, PIXEL_SOLID, nGrassColour);
-                if (x >= nLeftGrass && x < nLeftClip)
-                    Draw(x, nRow, PIXEL_SOLID, nClipColour);
-                if (x >= nLeftClip && x < nRightClip)
-                    Draw(x, nRow, PIXEL_SOLID, nRoadColour);
-                if (x >= nRightClip && x < nRightGrass)
-                    Draw(x, nRow, PIXEL_SOLID, nClipColour);
-                if (x >= nRightGrass && x < ScreenWidth())
-                    Draw(x, nRow, PIXEL_SOLID, nGrassColour);
-
-            }
-
-        // Draw Car - car position on road is proportional to difference between
-        // current accumulated track curvature, and current accumulated player curvature
-        // i.e. if they are similar, the car will be in the middle of the track
-        fCarPos = fPlayerCurvature - fTrackCurvature;
-        int nCarPos = ScreenWidth() / 2 + ((int)(ScreenWidth() * fCarPos) / 2.0) - 7; // Offset for sprite
-
-        // Draw a car that represents what the player is doing. Apologies for the quality
-        // of the sprite... :-(
-        switch (nCarDirection)
-        {
-        case 0:
-            DrawStringAlpha(nCarPos, 50, L"   ||####||   ");
-            DrawStringAlpha(nCarPos, 51, L"      ##      ");
-            DrawStringAlpha(nCarPos, 52, L"     ####     ");
-            DrawStringAlpha(nCarPos, 53, L"     ####     ");
-            DrawStringAlpha(nCarPos, 54, L"|||  ####  |||");
-            DrawStringAlpha(nCarPos, 55, L"|||########|||");
-            DrawStringAlpha(nCarPos, 56, L"|||  ####  |||");
-            break;
-
-        case +1:
-            DrawStringAlpha(nCarPos, 50, L"      //####//");
-            DrawStringAlpha(nCarPos, 51, L"         ##   ");
-            DrawStringAlpha(nCarPos, 52, L"       ####   ");
-            DrawStringAlpha(nCarPos, 53, L"      ####    ");
-            DrawStringAlpha(nCarPos, 54, L"///  ####//// ");
-            DrawStringAlpha(nCarPos, 55, L"//#######///O ");
-            DrawStringAlpha(nCarPos, 56, L"/// #### //// ");
-            break;
-
-        case -1:
-            DrawStringAlpha(nCarPos, 50, L"\\\\####\\\\      ");
-            DrawStringAlpha(nCarPos, 51, L"   ##         ");
-            DrawStringAlpha(nCarPos, 52, L"   ####       ");
-            DrawStringAlpha(nCarPos, 53, L"    ####      ");
-            DrawStringAlpha(nCarPos, 54, L" \\\\\\\\####  \\\\\\");
-            DrawStringAlpha(nCarPos, 55, L" O\\\\\\#######\\\\");
-            DrawStringAlpha(nCarPos, 56, L" \\\\\\\\ #### \\\\\\");
-            break;
-        }
-
-        // Draw Stats
-        DrawString(0, 0, L"Distance: " + to_wstring(fDistance));
-        DrawString(0, 1, L"Target Curvature: " + to_wstring(fCurvature));
-        DrawString(0, 2, L"Player Curvature: " + to_wstring(fPlayerCurvature));
-        DrawString(0, 3, L"Player Speed    : " + to_wstring(fSpeed));
-        DrawString(0, 4, L"Track Curvature : " + to_wstring(fTrackCurvature));
-
-        auto disp_time = [](float t) // Little lambda to turn floating point seconds into minutes:seconds:millis string
-        {
-            int nMinutes = t / 60.0f;
-            int nSeconds = t - (nMinutes * 60.0f);
-            int nMilliSeconds = (t - (float)nSeconds) * 1000.0f;
-            return to_wstring(nMinutes) + L"." + to_wstring(nSeconds) + L":" + to_wstring(nMilliSeconds);
+            return (m_stack.top().second + y) * m_nMazeWidth + (m_stack.top().first + x);
         };
 
-        // Display current laptime
-        DrawString(10, 8, disp_time(fCurrentLapTime));
-
-        // Display last 5 lap times
-        int j = 10;
-        for (auto l : listLapTimes)
+        // Do Maze Algorithm
+        if (m_nVisitedCells < m_nMazeWidth * m_nMazeHeight)
         {
-            DrawString(10, j, disp_time(l));
-            j++;
+            // Create a set of unvisted neighbours
+            vector<int> neighbours;
+
+            // North neighbour
+            if (m_stack.top().second > 0 && (m_maze[offset(0, -1)] & CELL_VISITED) == 0)
+                neighbours.push_back(0);
+            // East neighbour
+            if (m_stack.top().first < m_nMazeWidth - 1 && (m_maze[offset(1, 0)] & CELL_VISITED) == 0)
+                neighbours.push_back(1);
+            // South neighbour
+            if (m_stack.top().second < m_nMazeHeight - 1 && (m_maze[offset(0, 1)] & CELL_VISITED) == 0)
+                neighbours.push_back(2);
+            // West neighbour
+            if (m_stack.top().first > 0 && (m_maze[offset(-1, 0)] & CELL_VISITED) == 0)
+                neighbours.push_back(3);
+
+            // Are there any neighbours available?
+            if (!neighbours.empty())
+            {
+                // Choose one available neighbour at random
+                int next_cell_dir = neighbours[rand() % neighbours.size()];
+
+                // Create a path between the neighbour and the current cell
+                switch (next_cell_dir)
+                {
+                case 0: // North
+                    m_maze[offset(0, -1)] |= CELL_VISITED | CELL_PATH_S;
+                    m_maze[offset(0,  0)] |= CELL_PATH_N;
+                    m_stack.push(make_pair((m_stack.top().first + 0), (m_stack.top().second - 1)));
+                    break;
+
+                case 1: // East
+                    m_maze[offset(+1, 0)] |= CELL_VISITED | CELL_PATH_W;
+                    m_maze[offset( 0, 0)] |= CELL_PATH_E;
+                    m_stack.push(make_pair((m_stack.top().first + 1), (m_stack.top().second + 0)));
+                    break;
+
+                case 2: // South
+                    m_maze[offset(0, +1)] |= CELL_VISITED | CELL_PATH_N;
+                    m_maze[offset(0,  0)] |= CELL_PATH_S;
+                    m_stack.push(make_pair((m_stack.top().first + 0), (m_stack.top().second + 1)));
+                    break;
+
+                case 3: // West
+                    m_maze[offset(-1, 0)] |= CELL_VISITED | CELL_PATH_E;
+                    m_maze[offset( 0, 0)] |= CELL_PATH_W;
+                    m_stack.push(make_pair((m_stack.top().first - 1), (m_stack.top().second + 0)));
+                    break;
+
+                }
+
+                m_nVisitedCells++;
+            }
+            else
+            {
+                // No available neighbours so backtrack!
+                m_stack.pop();
+            }
         }
+
+
+        // === DRAWING STUFF ===
+
+        // Clear Screen by drawing 'spaces' everywhere
+        Fill(0, 0, ScreenWidth(), ScreenHeight(), L' ');
+
+        // Draw Maze
+        for (int x = 0; x < m_nMazeWidth; x++)
+        {
+            for (int y = 0; y < m_nMazeHeight; y++)
+            {
+                // Each cell is inflated by m_nPathWidth, so fill it in
+                for (int py = 0; py < m_nPathWidth; py++)
+                    for (int px = 0; px < m_nPathWidth; px++)
+                    {
+                        if (m_maze[y * m_nMazeWidth + x] & CELL_VISITED)
+                            Draw(x * (m_nPathWidth + 1) + px, y * (m_nPathWidth + 1) + py, PIXEL_SOLID, FG_WHITE); // Draw Cell
+                        else
+                            Draw(x * (m_nPathWidth + 1) + px, y * (m_nPathWidth + 1) + py, PIXEL_SOLID, FG_BLUE); // Draw Cell
+                    }
+
+                // Draw passageways between cells
+                for (int p = 0; p < m_nPathWidth; p++)
+                {
+                    if (m_maze[y * m_nMazeWidth + x] & CELL_PATH_S)
+                        Draw(x * (m_nPathWidth + 1) + p, y * (m_nPathWidth + 1) + m_nPathWidth); // Draw South Passage
+
+                    if (m_maze[y * m_nMazeWidth + x] & CELL_PATH_E)
+                        Draw(x * (m_nPathWidth + 1) + m_nPathWidth, y * (m_nPathWidth + 1) + p); // Draw East Passage
+                }
+            }
+        }
+
+        // Draw Unit - the top of the stack
+        for (int py = 0; py < m_nPathWidth; py++)
+            for (int px = 0; px < m_nPathWidth; px++)
+                Draw(m_stack.top().first * (m_nPathWidth + 1) + px, m_stack.top().second * (m_nPathWidth + 1) + py, PIXEL_SOLID, FG_GREEN); // Draw Cell
+
 
         return true;
     }
@@ -296,9 +208,12 @@ protected:
 
 int main()
 {
+    // Seed random number generator
+    srand(clock());
+
     // Use olcConsoleGameEngine derived app
-    OneLoneCoder_FormulaOLC game;
-    game.ConstructConsole(160, 80, 8, 8);
+    OneLoneCoder_Maze game;
+    game.ConstructConsole(160, 70, 8, 8);
     game.Start();
 
     return 0;
